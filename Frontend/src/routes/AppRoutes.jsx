@@ -22,6 +22,10 @@ import GateQrScanner from "../pages/owner/GateQrScanner";
 // Admin Pages
 import AdminAnalytics from "../pages/admin/AdminAnalytics";
 
+import StudyScheduler from "../pages/user/StudyScheduler";
+
+// Inside <Route element={<ProtectedRoute allowedRoles={['user', 'owner', 'admin']} />}>:
+
 export default function AppRoutes() {
   return (
     <Routes>
@@ -40,6 +44,7 @@ export default function AppRoutes() {
         <Route
           element={<ProtectedRoute allowedRoles={["user", "owner", "admin"]} />}
         >
+          <Route path="/study-planner" element={<StudyScheduler />} />
           <Route path="/my-passes" element={<MyPasses />} />
         </Route>
 

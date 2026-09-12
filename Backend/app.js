@@ -5,6 +5,7 @@ import userRoutes from './routes/user.routes.js';
 import ownerRoutes from './routes/owner.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import { errorHandler } from './middlewares/error.middleware.js';
+import taskRoutes from './routes/task.routes.js';
 
 const app = express();
 
@@ -15,6 +16,8 @@ app.use(express.json({ limit: '16kb' }));
 app.get('/health', (req, res) => res.status(200).json({ status: 'OK' }));
 
 // Route Mounts
+
+app.use('/api/v1/tasks', taskRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/user', userRoutes);
 app.use('/api/v1/owner', ownerRoutes);

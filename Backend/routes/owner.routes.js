@@ -17,6 +17,13 @@ import {
   verifyQrSchema
 } from '../validators/owner.validator.js';
 
+import {
+  vacateSeat,
+  transferSeat,
+  toggleSeatMaintenance,
+} from '../controllers/owner.controller.js';
+
+
 const router = Router();
 
 // Secure all endpoints: requires logged-in user with 'owner' or 'admin' role
@@ -32,6 +39,12 @@ router.post(
   validate(batchCreateSeatsSchema),
   batchCreateSeats
 );
+
+// ... existing routes
+router.patch('/libraries/:libraryId/seats/:seatId/vacate', vacateSeat);
+router.patch('/libraries/:libraryId/seats/:currentSeatId/transfer', transferSeat);
+router.patch('/libraries/:libraryId/seats/:seatId/maintenance', toggleSeatMaintenance);
+
 
 // Real-Time Desk Grid
 router.get('/libraries/:libraryId/occupancy', getLiveOccupancy);

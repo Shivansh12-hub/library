@@ -18,7 +18,6 @@ export const getLibraries = asyncHandler(async (req, res) => {
   } = req.query;
   const filter = { isActive: true };
 
-  // Geospatial radius search using GeoJSON
   if (longitude && latitude) {
     filter["address.location"] = {
       $near: {
@@ -29,14 +28,13 @@ export const getLibraries = asyncHandler(async (req, res) => {
             Number.parseFloat(latitude),
           ],
         },
-        $maxDistance: Number.parseFloat(maxDistanceKm) * 1000, // In meters
+        $maxDistance: Number.parseFloat(maxDistanceKm) * 1000,
       },
     };
   } else if (city) {
     filter["address.city"] = new RegExp(city.trim(), "i");
   }
 
-  // Filter by amenities (e.g. ?amenities=wifi,ac)
   if (amenities) {
     const list = amenities.split(",").map((item) => item.trim());
     filter.amenities = { $all: list };
@@ -100,7 +98,6 @@ export const getAvailableSeats = asyncHandler(async (req, res, next) => {
     return next(new ApiError(400, "endDate must be greater than startDate"));
   }
 
-  // Run physical seat lookup and conflicting bookings check concurrently
   const [allSeats, conflictingBookings] = await Promise.all([
     Seat.find({ library: libraryId, isActive: true }).lean(),
     Booking.find({
@@ -118,7 +115,6 @@ export const getAvailableSeats = asyncHandler(async (req, res, next) => {
     conflictingBookings.map((b) => b.seat.toString()),
   );
 
-  // Map floor plan grid layout with real-time vacancy flag
   const seatGrid = allSeats.map((seat) => ({
     _id: seat._id,
     seatNumber: seat.seatNumber,
@@ -136,13 +132,13 @@ export const getAvailableSeats = asyncHandler(async (req, res, next) => {
   });
 });
 
-// 4. Reserve a Seat (Atomic MongoDB Transaction to prevent race conditions)
+// 4. Reserve a Seat (Atomic MongoDB Transaction)
 export const createBooking = asyncHandler(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const userId = req.user.id;
+    const userId = req.user._id || req.user.id;
     const {
       libraryId,
       seatId,
@@ -153,10 +149,34 @@ export const createBooking = asyncHandler(async (req, res, next) => {
       amountPaid,
     } = req.body;
 
+    // Check if user already has an active desk in this shift & timeframe
+    const existingUserBooking = await Booking.findOne({
+      user: userId,
+      library: libraryId,
+      shiftId: shiftId,
+      status: { $in: ["active", "confirmed"] },
+      $or: [
+        {
+          startDate: { $lte: new Date(endDate) },
+          endDate: { $gte: new Date(startDate) },
+        },
+      ],
+    }).session(session);
+
+    if (existingUserBooking) {
+      await session.abortTransaction();
+      return next(
+        new ApiError(
+          400,
+          "You already have an active desk reserved for this shift.",
+        ),
+      );
+    }
+
     const start = new Date(startDate);
     const end = new Date(endDate);
 
-    // Concurrency Lock: Double-booking guard inside isolated transaction
+    // Double-booking guard
     const conflict = await Booking.findOne({
       seat: seatId,
       shiftId,
@@ -175,7 +195,13 @@ export const createBooking = asyncHandler(async (req, res, next) => {
       );
     }
 
-    // Generate unique gate QR code pass token (16-char hex)
+    // Lookup seat details for response & broadcast
+    const seat = await Seat.findById(seatId).session(session);
+    if (!seat) {
+      await session.abortTransaction();
+      return next(new ApiError(404, "Selected seat does not exist."));
+    }
+
     const qrPassCode = crypto.randomBytes(8).toString("hex").toUpperCase();
 
     const [newBooking] = await Booking.create(
@@ -190,7 +216,8 @@ export const createBooking = asyncHandler(async (req, res, next) => {
           endDate: end,
           amountPaid,
           qrPassCode,
-          paymentStatus: "completed", // Change to 'pending' if chaining Razorpay/Stripe webhook
+          status: "active",
+          paymentStatus: "completed",
         },
       ],
       { session },
@@ -198,19 +225,33 @@ export const createBooking = asyncHandler(async (req, res, next) => {
 
     await session.commitTransaction();
 
-    const io = getIO();
+    // Real-time broadcasts
+    try {
+      const io = getIO();
+      if (io) {
+        // Broadcast to floor plan listeners
+        io.to(`library_${libraryId}`).emit("seat_reserved", {
+          seatId,
+          shiftId,
+          startDate: start,
+          endDate: end,
+          bookedBy: {
+            userName: req.user.name,
+            userPhone: req.user.phone,
+          },
+        });
 
-    // Broadcast to anyone looking at this library's seat layout
-    io.to(`library_${libraryId}`).emit("seat_reserved", {
-      seatId,
-      shiftId,
-      startDate: start,
-      endDate: end,
-      bookedBy: {
-        userName: req.user.name,
-        userPhone: req.user.phone,
-      },
-    });
+        // Broadcast to global activity feed
+        io.emit("activity_logged", {
+          id: Date.now(),
+          type: "booking",
+          message: `Desk ${seat.seatNumber} reserved by ${req.user.name || "Student"}`,
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        });
+      }
+    } catch (socketErr) {
+      console.warn("Socket broadcast error:", socketErr.message);
+    }
 
     res.status(201).json({
       success: true,
@@ -227,7 +268,8 @@ export const createBooking = asyncHandler(async (req, res, next) => {
 
 // 5. Get User's Active and Past Bookings
 export const getMyBookings = asyncHandler(async (req, res) => {
-  const bookings = await Booking.find({ user: req.user.id })
+  const userId = req.user._id || req.user.id;
+  const bookings = await Booking.find({ user: userId })
     .populate("library", "name address photos amenities")
     .populate("seat", "seatNumber type")
     .sort({ createdAt: -1 })
@@ -240,9 +282,10 @@ export const getMyBookings = asyncHandler(async (req, res) => {
   });
 });
 
-// 6. Get Single Booking Pass Details (For Gate Entry QR Rendering)
+// 6. Get Single Booking Pass Details
 export const getBookingPass = asyncHandler(async (req, res, next) => {
   const { bookingId } = req.params;
+  const userId = req.user._id || req.user.id;
 
   if (!mongoose.Types.ObjectId.isValid(bookingId)) {
     return next(new ApiError(400, "Invalid booking ID format"));
@@ -250,7 +293,7 @@ export const getBookingPass = asyncHandler(async (req, res, next) => {
 
   const booking = await Booking.findOne({
     _id: bookingId,
-    user: req.user.id,
+    user: userId,
   })
     .populate("library", "name address")
     .populate("seat", "seatNumber type")
@@ -269,13 +312,14 @@ export const getBookingPass = asyncHandler(async (req, res, next) => {
 // 7. Toggle Save / Bookmark Library
 export const toggleSaveLibrary = asyncHandler(async (req, res, next) => {
   const { libraryId } = req.params;
+  const userId = req.user._id || req.user.id;
 
   if (!mongoose.Types.ObjectId.isValid(libraryId)) {
     return next(new ApiError(400, "Invalid library ID format"));
   }
 
-  const user = await User.findById(req.user.id);
-  const isSaved = user.savedLibraries.includes(libraryId);
+  const user = await User.findById(userId);
+  const isSaved = user.savedLibraries?.includes(libraryId);
 
   if (isSaved) {
     user.savedLibraries.pull(libraryId);

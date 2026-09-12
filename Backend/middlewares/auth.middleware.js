@@ -9,8 +9,14 @@ export const authenticate = (req, res, next) => {
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_key');
+    
+    // Normalize user object so both _id and id are accessible
+    req.user = {
+      ...decoded,
+      _id: decoded._id || decoded.id,
+    };
+
     next();
   } catch (err) {
     next(new ApiError(401, 'Unauthorized: Invalid or expired access token'));
