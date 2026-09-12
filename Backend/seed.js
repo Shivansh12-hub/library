@@ -23,23 +23,25 @@ const seedDatabase = async () => {
     // 1. Create Owner & Student Users
     const hashedPassword = await bcrypt.hash('password123', 10);
 
-    const owner = await User.create({
-      name: 'Ramesh Sharma',
-      phone: '9876543210',
-      email: 'owner@example.com',
-      password: hashedPassword,
-      role: 'owner',
-      isVerified: true
-    });
+    // Remove: const hashedPassword = await bcrypt.hash('password123', 10);
 
-    const student = await User.create({
-      name: 'Aarav Patel',
-      phone: '9123456780',
-      email: 'student@example.com',
-      password: hashedPassword,
-      role: 'user',
-      isVerified: true
-    });
+const owner = await User.create({
+  name: 'Ramesh Sharma',
+  phone: '9876543210',
+  email: 'owner@example.com',
+  password: 'password123', // <--- Plain text here, User.js will hash it once
+  role: 'owner',
+  isVerified: true
+});
+
+const student = await User.create({
+  name: 'Aarav Patel',
+  phone: '9123456780',
+  email: 'student@example.com',
+  password: 'password123', // <--- Plain text here
+  role: 'user',
+  isVerified: true
+});
 
     console.log('👤 Created Owner & Student test accounts.');
 
