@@ -5,7 +5,7 @@ import Library from "../models/Library.js";
 import Seat from "../models/Seat.js";
 import Booking from "../models/Booking.js";
 import { ApiError, asyncHandler } from "../utils/apiResponse.js";
-import { getIO } from "../socket.js";
+import { getIO, finalizeBookingHold } from "../socket.js";
 
 // 1. Discover Libraries (Nearby coordinates, city, or amenities)
 export const getLibraries = asyncHandler(async (req, res) => {
@@ -115,13 +115,16 @@ export const getAvailableSeats = asyncHandler(async (req, res, next) => {
     conflictingBookings.map((b) => b.seat.toString()),
   );
 
+  // Map floor plan grid layout with real-time vacancy flag
   const seatGrid = allSeats.map((seat) => ({
     _id: seat._id,
     seatNumber: seat.seatNumber,
     type: seat.type,
     hasSocket: seat.hasSocket,
     hasLocker: seat.hasLocker,
-    isAvailable: !bookedSeatIdSet.has(seat._id.toString()),
+    isMaintenance: Boolean(seat.isMaintenance),
+    // Unavailable if booked OR under maintenance
+    isAvailable: !bookedSeatIdSet.has(seat._id.toString()) && !seat.isMaintenance,
   }));
 
   res.status(200).json({
@@ -196,10 +199,19 @@ export const createBooking = asyncHandler(async (req, res, next) => {
     }
 
     // Lookup seat details for response & broadcast
+    // Lookup seat details for response & broadcast
     const seat = await Seat.findById(seatId).session(session);
     if (!seat) {
       await session.abortTransaction();
       return next(new ApiError(404, "Selected seat does not exist."));
+    }
+
+    // Maintenance Guard
+    if (seat.isMaintenance) {
+      await session.abortTransaction();
+      return next(
+        new ApiError(400, "This desk is currently under maintenance and cannot be reserved.")
+      );
     }
 
     const qrPassCode = crypto.randomBytes(8).toString("hex").toUpperCase();
@@ -223,7 +235,11 @@ export const createBooking = asyncHandler(async (req, res, next) => {
       { session },
     );
 
+  
     await session.commitTransaction();
+
+    // Release temporary hold because seat is now formally confirmed
+    finalizeBookingHold(libraryId, shiftId, seatId);
 
     // Real-time broadcasts
     try {
