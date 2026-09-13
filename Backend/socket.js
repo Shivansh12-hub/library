@@ -1,9 +1,7 @@
 import { Server } from "socket.io";
 
 let io;
-
-// In-memory hold registry: key = `${libraryId}_${shiftId}_${seatId}`
-const activeHolds = new Map();
+const activeHolds = new Map(); // key: `${libraryId}_${shiftId}_${seatId}`
 
 export const initSocket = (httpServer) => {
   io = new Server(httpServer, {
@@ -14,45 +12,49 @@ export const initSocket = (httpServer) => {
   });
 
   io.on("connection", (socket) => {
-    // 1. Join room for specific library
+    // 1. Join library room
     socket.on("join_library", (libraryId) => {
-      socket.join(`library_${libraryId}`);
+      const room = `library_${libraryId}`;
+      socket.join(room);
 
-      // Send all current active holds for this library immediately
-      const currentLibraryHolds = [];
+      // Send all current active holds for this library
+      const currentHolds = [];
       for (const [key, val] of activeHolds.entries()) {
         if (key.startsWith(`${libraryId}_`)) {
-          currentLibraryHolds.push(val);
+          currentHolds.push({
+            seatId: val.seatId,
+            shiftId: val.shiftId,
+            expiresAt: val.expiresAt,
+          });
         }
       }
-      socket.emit("initial_holds", currentLibraryHolds);
+      socket.emit("initial_holds", currentHolds);
     });
 
-    // 2. Request a 5-minute hold on a seat
+    // 2. Hold Seat Request (5 mins)
     socket.on("hold_seat", ({ libraryId, shiftId, seatId, seatNumber, user }) => {
       const holdKey = `${libraryId}_${shiftId}_${seatId}`;
 
-      // Reject if held by someone else
+      // Check if another socket holds it
       if (activeHolds.has(holdKey)) {
         const existing = activeHolds.get(holdKey);
         if (existing.socketId !== socket.id) {
           return socket.emit("hold_rejected", {
             seatId,
-            message: "Seat is already held by another student.",
+            message: "This desk is currently held in another student's cart.",
           });
         }
       }
 
-      // Clear any prior hold this user had in this session
+      // Clear any prior hold from this socket
       clearSocketHold(socket.id);
 
-      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
-
+      const expiresAt = Date.now() + 5 * 60 * 1000;
       const timerId = setTimeout(() => {
         releaseHold(holdKey);
       }, 5 * 60 * 1000);
 
-      const holdData = {
+      activeHolds.set(holdKey, {
         holdKey,
         libraryId,
         shiftId,
@@ -62,14 +64,12 @@ export const initSocket = (httpServer) => {
         userId: user?.id || user?._id,
         expiresAt,
         timerId,
-      };
+      });
 
-      activeHolds.set(holdKey, holdData);
-
-      // Notify the locker with confirmed timer
+      // Confirm to caller
       socket.emit("hold_confirmed", { seatId, expiresAt });
 
-      // Notify everyone else on the floor
+      // Broadcast to all others in the room
       socket.to(`library_${libraryId}`).emit("seat_held", {
         seatId,
         shiftId,
@@ -77,13 +77,12 @@ export const initSocket = (httpServer) => {
       });
     });
 
-    // 3. User voluntarily releases or picks another seat
+    // 3. User releases hold manually
     socket.on("release_seat", ({ libraryId, shiftId, seatId }) => {
-      const holdKey = `${libraryId}_${shiftId}_${seatId}`;
-      releaseHold(holdKey);
+      releaseHold(`${libraryId}_${shiftId}_${seatId}`);
     });
 
-    // 4. Clean up if student closes tab / disconnects
+    // 4. Tab closed / disconnected
     socket.on("disconnect", () => {
       clearSocketHold(socket.id);
     });
@@ -92,10 +91,8 @@ export const initSocket = (httpServer) => {
   return io;
 };
 
-// Helper to remove and broadcast hold release
 const releaseHold = (holdKey) => {
   if (!activeHolds.has(holdKey)) return;
-
   const data = activeHolds.get(holdKey);
   clearTimeout(data.timerId);
   activeHolds.delete(holdKey);
@@ -108,7 +105,6 @@ const releaseHold = (holdKey) => {
   }
 };
 
-// Clear any hold created by a specific socket ID
 const clearSocketHold = (socketId) => {
   for (const [key, data] of activeHolds.entries()) {
     if (data.socketId === socketId) {
@@ -122,7 +118,6 @@ export const getIO = () => {
   return io;
 };
 
-// Export helper to permanently clear hold when booking succeeds
 export const finalizeBookingHold = (libraryId, shiftId, seatId) => {
   const holdKey = `${libraryId}_${shiftId}_${seatId}`;
   if (activeHolds.has(holdKey)) {

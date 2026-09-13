@@ -90,13 +90,23 @@ export default function OwnerLiveFloor() {
   };
 
   const handleToggleMaintenance = async () => {
+    if (!activeSeat) return;
     setActionLoading(true);
     try {
-      await api.patch(`/owner/libraries/${selectedLibId}/seats/${activeSeat._id}/maintenance`);
+      const res = await api.patch(
+        `/owner/libraries/${selectedLibId}/seats/${activeSeat._id}/maintenance`
+      );
+      
+      const newStatus = res.data.data.isMaintenance;
+
+      // Update local grid immediately
+      setGridData((prev) =>
+        prev.map((s) => (s._id === activeSeat._id ? { ...s, isMaintenance: newStatus } : s))
+      );
+
       setActiveSeat(null);
-      loadOccupancy();
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to toggle maintenance');
+      alert(err.response?.data?.message || "Failed to toggle maintenance");
     } finally {
       setActionLoading(false);
     }

@@ -13,6 +13,7 @@ import { getIO } from "../socket.js";
 
 
 // 1. Vacate an occupied seat early
+// 1. Vacate an occupied seat early
 export const vacateSeat = asyncHandler(async (req, res, next) => {
   const { libraryId, seatId } = req.params;
 
@@ -30,10 +31,9 @@ export const vacateSeat = asyncHandler(async (req, res, next) => {
   booking.endDate = new Date();
   await booking.save();
 
-  // Broadcast update to all clients watching this library
-  const io = req.app.get('io');
+  const io = req.app.get('io') || getIO();
   if (io) {
-    io.to(libraryId).emit('seat_vacated', { seatId, libraryId });
+    io.to(`library_${libraryId}`).emit('seat_vacated', { seatId, libraryId });
   }
 
   res.status(200).json({ success: true, message: 'Seat vacated successfully.' });
@@ -48,7 +48,6 @@ export const transferSeat = asyncHandler(async (req, res, next) => {
     return next(new ApiError(400, 'Target seat must be different from current seat.'));
   }
 
-  // Ensure current booking exists
   const booking = await Booking.findOne({
     library: libraryId,
     seat: currentSeatId,
@@ -59,7 +58,6 @@ export const transferSeat = asyncHandler(async (req, res, next) => {
     return next(new ApiError(404, 'No active booking found on current seat.'));
   }
 
-  // Ensure target seat exists and has no active booking
   const conflict = await Booking.findOne({
     library: libraryId,
     seat: targetSeatId,
@@ -70,13 +68,12 @@ export const transferSeat = asyncHandler(async (req, res, next) => {
     return next(new ApiError(400, 'Target seat is already occupied.'));
   }
 
-  // Reassign
   booking.seat = targetSeatId;
   await booking.save();
 
-  const io = req.app.get('io');
+  const io = req.app.get('io') || getIO();
   if (io) {
-    io.to(libraryId).emit('seat_transferred', {
+    io.to(`library_${libraryId}`).emit('seat_transferred', {
       fromSeatId: currentSeatId,
       toSeatId: targetSeatId,
       user: booking.user,
@@ -98,10 +95,10 @@ export const toggleSeatMaintenance = asyncHandler(async (req, res, next) => {
   seat.isMaintenance = !seat.isMaintenance;
   await seat.save();
 
-  const io = req.app.get('io');
+  const io = req.app.get('io') || getIO();
   if (io) {
-    io.to(libraryId).emit('seat_maintenance_toggled', {
-      seatId,
+    io.to(`library_${libraryId}`).emit('seat_maintenance_toggled', {
+      seatId: seat._id.toString(),
       isMaintenance: seat.isMaintenance,
     });
   }
@@ -109,7 +106,10 @@ export const toggleSeatMaintenance = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     message: `Seat marked as ${seat.isMaintenance ? 'Under Maintenance' : 'Operational'}.`,
-    isMaintenance: seat.isMaintenance,
+    data: {
+      _id: seat._id,
+      isMaintenance: seat.isMaintenance,
+    },
   });
 });
 
@@ -209,7 +209,7 @@ export const getLiveOccupancy = asyncHandler(async (req, res) => {
     bookingMap.set(b.seat.toString(), b);
   });
 
-  const liveGrid = seats.map((seat) => {
+const liveGrid = seats.map((seat) => {
     const booking = bookingMap.get(seat._id.toString());
     return {
       _id: seat._id,
@@ -217,6 +217,7 @@ export const getLiveOccupancy = asyncHandler(async (req, res) => {
       type: seat.type,
       hasSocket: seat.hasSocket,
       hasLocker: seat.hasLocker,
+      isMaintenance: Boolean(seat.isMaintenance), // <-- Add this line
       isOccupied: Boolean(booking),
       occupiedBy: booking
         ? {
@@ -345,21 +346,12 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
 });
 
 // 6. Gate QR Pass Code Verification
+// 6. Gate QR Pass Code Verification
 export const verifyGateQr = asyncHandler(async (req, res, next) => {
   const { libraryId } = req.params;
   const { qrPassCode, type = "in" } = req.body;
 
   await assertOwnership(libraryId, req.user.id);
-
-  const io = req.app.get('io');
-if (io) {
-  io.emit('activity_logged', {
-    id: Date.now(),
-    type: type === 'in' ? 'checkin' : 'checkout',
-    message: `${studentName} scanned ${type.toUpperCase()} (Desk ${seatNumber})`,
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-  });
-}
 
   const now = new Date();
 
@@ -377,28 +369,32 @@ if (io) {
 
   if (!booking) {
     return next(
-      new ApiError(404, "Invalid or expired pass code for this library"),
+      new ApiError(404, "Invalid or expired pass code for this library")
     );
   }
 
-  // Record entry/exit log inside the embedded subdocument array
-  booking.checkInLogs.push({
-    timestamp: now,
-    type,
-    scannedBy: req.user.id,
-  });
+  const studentName = booking.user?.name || "Student";
+  const seatNumber = booking.seat?.seatNumber || "N/A";
 
-  await booking.save();
+  // Real-time broadcast to system activity feed (AFTER verification)
+  const io = req.app.get('io');
+  if (io) {
+    io.emit('activity_logged', {
+      id: Date.now(),
+      type: type === 'in' ? 'checkin' : 'checkout',
+      message: `${studentName} scanned ${type.toUpperCase()} (Desk ${seatNumber})`,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    });
+  }
 
   res.status(200).json({
     success: true,
-    message: `Pass valid. User marked: ${type.toUpperCase()}`,
+    message: `Gate check-${type.toUpperCase()} successful`,
     data: {
-      studentName: booking.user.name,
-      studentPhone: booking.user.phone,
-      seatNumber: booking.seat.seatNumber,
-      seatType: booking.seat.type,
-      logRecorded: type,
+      studentName,
+      studentPhone: booking.user?.phone,
+      seatNumber,
+      seatType: booking.seat?.type,
       timestamp: now,
     },
   });
