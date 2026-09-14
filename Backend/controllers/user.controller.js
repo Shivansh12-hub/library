@@ -135,6 +135,52 @@ export const getAvailableSeats = asyncHandler(async (req, res, next) => {
   });
 });
 
+
+// Renew an active or expiring booking for the next cycle
+export const renewBooking = asyncHandler(async (req, res, next) => {
+  const { bookingId } = req.body;
+  const userId = req.user._id || req.user.id;
+
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    user: userId,
+  });
+
+  if (!booking) {
+    return next(new ApiError(404, "Booking pass not found."));
+  }
+
+  // Calculate new extension (e.g., adding another 30 days from current end date)
+  const currentEnd = new Date(booking.endDate);
+  const baseDate = currentEnd > new Date() ? currentEnd : new Date();
+  const newEndDate = new Date(baseDate);
+  newEndDate.setDate(newEndDate.getDate() + 30);
+
+  booking.endDate = newEndDate;
+  booking.status = "active";
+  booking.paymentStatus = "completed";
+  await booking.save();
+
+  // Broadcast activity feed event
+  try {
+    const io = getIO();
+    io.emit("activity_logged", {
+      id: Date.now(),
+      type: "renewal",
+      message: `Pass renewed successfully for Desk ID: ${booking.seat}`,
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    });
+  } catch (err) {
+    console.warn("Socket broadcast error:", err.message);
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Pass renewed successfully for another 30 days.",
+    data: booking,
+  });
+});
+
 // 4. Reserve a Seat (Atomic MongoDB Transaction)
 export const createBooking = asyncHandler(async (req, res, next) => {
   const session = await mongoose.startSession();

@@ -58,6 +58,9 @@ export default function AppRoutes() {
         {/* Admin Routes */}
         <Route element={<ProtectedRoute allowedRoles={["admin"]} />}>
           <Route path="/admin/analytics" element={<AdminAnalytics />} />
+
+// Inside the Protected Route (role === 'admin')
+<Route path="/admin/analytics" element={<AdminAnalytics />} />
         </Route>
       </Route>
 

@@ -1,6 +1,21 @@
 import jwt from 'jsonwebtoken';
 import { ApiError } from '../utils/apiResponse.js';
 
+// Keep your existing authenticate / verifyToken middleware above, then export this:
+export const authorizeRoles = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return next(
+        new ApiError(
+          403,
+          `Forbidden: Role '${req.user?.role || "unknown"}' is not authorized to access this resource`
+        )
+      );
+    }
+    next();
+  };
+};
+
 export const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
