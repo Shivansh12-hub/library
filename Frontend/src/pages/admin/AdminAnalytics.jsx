@@ -30,6 +30,21 @@ export default function AdminAnalytics() {
     }
   };
 
+  const handleDeleteLibrary = async (libraryId, libName) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to PERMANENTLY DELETE "${libName}"?\n\nThis will purge all seats, desks, and bookings linked to this library forever.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await api.delete(`/admin/libraries/${libraryId}`);
+      alert("Property and all child records purged successfully.");
+      fetchAnalytics();
+    } catch (err) {
+      alert(err.response?.data?.message || "Failed to delete library");
+    }
+  };
+
   if (loading) return <div>Loading platform metrics...</div>;
   if (error) return <div style={{ color: "#ef4444" }}>{error}</div>;
 
@@ -45,13 +60,7 @@ export default function AdminAnalytics() {
       </div>
 
       {/* Metric Cards */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: "16px",
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px" }}>
         <div style={cardStyle}>
           <span style={labelStyle}>Total Revenue</span>
           <span style={valStyle}>₹{metrics.totalRevenue.toLocaleString()}</span>
@@ -62,9 +71,7 @@ export default function AdminAnalytics() {
         </div>
         <div style={cardStyle}>
           <span style={labelStyle}>Active Desks</span>
-          <span style={valStyle}>
-            {metrics.activeBookings} / {metrics.totalSeats}
-          </span>
+          <span style={valStyle}>{metrics.activeBookings} / {metrics.totalSeats}</span>
         </div>
         <div style={cardStyle}>
           <span style={labelStyle}>Active Libraries</span>
@@ -80,11 +87,93 @@ export default function AdminAnalytics() {
         </div>
       </div>
 
-      {/* Recent Bookings Audit */}
+      {/* Properties Control Table */}
       <div style={sectionBoxStyle}>
         <h3 style={{ margin: "0 0 16px 0", fontSize: "16px" }}>
-          Recent Transactions & Reservations
+          Registered Properties Directory ({librariesList.length})
         </h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {librariesList.length === 0 ? (
+            <p style={{ color: "#64748b", margin: 0 }}>No properties registered yet.</p>
+          ) : (
+            librariesList.map((lib) => (
+              <div
+                key={lib._id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "14px",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "6px",
+                  background: lib.isActive ? "#fff" : "#f8fafc",
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <strong style={{ fontSize: "15px" }}>{lib.name}</strong>
+                    <span
+                      style={{
+                        fontSize: "10px",
+                        padding: "2px 6px",
+                        borderRadius: "4px",
+                        fontWeight: "bold",
+                        background: lib.isActive ? "#dcfce7" : "#fee2e2",
+                        color: lib.isActive ? "#166534" : "#991b1b",
+                      }}
+                    >
+                      {lib.isActive ? "OPERATIONAL" : "SUSPENDED"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
+                    {lib.address?.street}, {lib.address?.locality}
+                  </div>
+                </div>
+
+                {/* Status Toggle & Hard Delete Buttons */}
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    onClick={() => handleToggleLibrary(lib._id)}
+                    style={{
+                      padding: "6px 12px",
+                      background: lib.isActive ? "#fef3c7" : "#dcfce7",
+                      color: lib.isActive ? "#92400e" : "#166534",
+                      border: "1px solid",
+                      borderColor: lib.isActive ? "#fcd34d" : "#86efac",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: "bold",
+                    }}
+                  >
+                    {lib.isActive ? "Suspend Property" : "Reactivate"}
+                  </button>
+
+                  <button
+                    onClick={() => handleDeleteLibrary(lib._id, lib.name)}
+                    style={{
+                      padding: "6px 12px",
+                      background: "#fee2e2",
+                      color: "#b91c1c",
+                      border: "1px solid #fca5a5",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: "bold",
+                    }}
+                  >
+                    Delete Permanently
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Audit Log Table */}
+      <div style={sectionBoxStyle}>
+        <h3 style={{ margin: "0 0 16px 0", fontSize: "16px" }}>Recent Transactions & Reservations</h3>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left", color: "#64748b" }}>
@@ -103,8 +192,8 @@ export default function AdminAnalytics() {
                   <strong>{b.user?.name || "Walk-In"}</strong>
                   <div style={{ fontSize: "11px", color: "#64748b" }}>{b.user?.phone}</div>
                 </td>
-                <td style={{ padding: "8px" }}>{b.library?.name}</td>
-                <td style={{ padding: "8px", fontWeight: "bold" }}>{b.seat?.seatNumber}</td>
+                <td style={{ padding: "8px" }}>{b.library?.name || "Deleted Hub"}</td>
+                <td style={{ padding: "8px", fontWeight: "bold" }}>{b.seat?.seatNumber || "—"}</td>
                 <td style={{ padding: "8px" }}>₹{b.amountPaid}</td>
                 <td style={{ padding: "8px" }}>
                   <span
@@ -128,50 +217,6 @@ export default function AdminAnalytics() {
           </tbody>
         </table>
       </div>
-
-      {/* Properties Control Table */}
-      <div style={sectionBoxStyle}>
-        <h3 style={{ margin: "0 0 16px 0", fontSize: "16px" }}>
-          Registered Properties Directory
-        </h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          {librariesList.map((lib) => (
-            <div
-              key={lib._id}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "12px",
-                border: "1px solid #e2e8f0",
-                borderRadius: "6px",
-              }}
-            >
-              <div>
-                <strong>{lib.name}</strong>
-                <div style={{ fontSize: "12px", color: "#64748b" }}>
-                  {lib.address?.street}, {lib.address?.locality}
-                </div>
-              </div>
-              <button
-                onClick={() => handleToggleLibrary(lib._id)}
-                style={{
-                  padding: "6px 14px",
-                  background: "#fee2e2",
-                  color: "#b91c1c",
-                  border: "1px solid #fca5a5",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                  fontWeight: "bold",
-                }}
-              >
-                Deactivate Property
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -184,6 +229,7 @@ const cardStyle = {
   display: "flex",
   flexDirection: "column",
   gap: "4px",
+  
 };
 
 const labelStyle = {

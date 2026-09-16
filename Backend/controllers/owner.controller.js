@@ -4,118 +4,11 @@ import Library from "../models/Library.js";
 import Seat from "../models/Seat.js";
 import Booking from "../models/Booking.js";
 import User from "../models/User.js";
+import Attendance from "../models/Attendance.js";
 import { ApiError, asyncHandler } from "../utils/apiResponse.js";
 import { getIO } from "../socket.js";
 
-
-
-
-
-
-// 1. Vacate an occupied seat early
-// 1. Vacate an occupied seat early
-export const vacateSeat = asyncHandler(async (req, res, next) => {
-  const { libraryId, seatId } = req.params;
-
-  const booking = await Booking.findOne({
-    library: libraryId,
-    seat: seatId,
-    status: { $in: ['active', 'confirmed'] },
-  });
-
-  if (!booking) {
-    return next(new ApiError(404, 'No active booking found for this seat.'));
-  }
-
-  booking.status = 'cancelled';
-  booking.endDate = new Date();
-  await booking.save();
-
-  const io = req.app.get('io') || getIO();
-  if (io) {
-    io.to(`library_${libraryId}`).emit('seat_vacated', { seatId, libraryId });
-  }
-
-  res.status(200).json({ success: true, message: 'Seat vacated successfully.' });
-});
-
-// 2. Transfer student from one desk to another
-export const transferSeat = asyncHandler(async (req, res, next) => {
-  const { libraryId, currentSeatId } = req.params;
-  const { targetSeatId } = req.body;
-
-  if (currentSeatId === targetSeatId) {
-    return next(new ApiError(400, 'Target seat must be different from current seat.'));
-  }
-
-  const booking = await Booking.findOne({
-    library: libraryId,
-    seat: currentSeatId,
-    status: { $in: ['active', 'confirmed'] },
-  });
-
-  if (!booking) {
-    return next(new ApiError(404, 'No active booking found on current seat.'));
-  }
-
-  const conflict = await Booking.findOne({
-    library: libraryId,
-    seat: targetSeatId,
-    status: { $in: ['active', 'confirmed'] },
-  });
-
-  if (conflict) {
-    return next(new ApiError(400, 'Target seat is already occupied.'));
-  }
-
-  booking.seat = targetSeatId;
-  await booking.save();
-
-  const io = req.app.get('io') || getIO();
-  if (io) {
-    io.to(`library_${libraryId}`).emit('seat_transferred', {
-      fromSeatId: currentSeatId,
-      toSeatId: targetSeatId,
-      user: booking.user,
-    });
-  }
-
-  res.status(200).json({ success: true, message: 'Seat reassigned successfully.', data: booking });
-});
-
-// 3. Toggle Maintenance Mode on a seat
-export const toggleSeatMaintenance = asyncHandler(async (req, res, next) => {
-  const { libraryId, seatId } = req.params;
-
-  const seat = await Seat.findOne({ _id: seatId, library: libraryId });
-  if (!seat) {
-    return next(new ApiError(404, 'Seat not found.'));
-  }
-
-  seat.isMaintenance = !seat.isMaintenance;
-  await seat.save();
-
-  const io = req.app.get('io') || getIO();
-  if (io) {
-    io.to(`library_${libraryId}`).emit('seat_maintenance_toggled', {
-      seatId: seat._id.toString(),
-      isMaintenance: seat.isMaintenance,
-    });
-  }
-
-  res.status(200).json({
-    success: true,
-    message: `Seat marked as ${seat.isMaintenance ? 'Under Maintenance' : 'Operational'}.`,
-    data: {
-      _id: seat._id,
-      isMaintenance: seat.isMaintenance,
-    },
-  });
-});
-
-
-
-// Helper: Ensure the authenticated owner owns the target library
+// Helper: Ensure authenticated owner owns the target library
 const assertOwnership = async (libraryId, ownerId) => {
   const library = await Library.findById(libraryId);
   if (!library) {
@@ -129,9 +22,10 @@ const assertOwnership = async (libraryId, ownerId) => {
 
 // 1. Create or Register a New Library Profile
 export const createLibrary = asyncHandler(async (req, res) => {
+  const ownerId = req.user?._id || req.user?.id;
   const newLibrary = await Library.create({
     ...req.body,
-    owner: req.user.id,
+    owner: ownerId,
   });
 
   res.status(201).json({
@@ -143,20 +37,24 @@ export const createLibrary = asyncHandler(async (req, res) => {
 
 // 2. Get All Libraries Belonging to Logged-in Owner
 export const getMyLibraries = asyncHandler(async (req, res) => {
-  const libraries = await Library.find({ owner: req.user.id }).lean();
-  res
-    .status(200)
-    .json({ success: true, count: libraries.length, data: libraries });
+  const ownerId = req.user?._id || req.user?.id;
+  const libraries = await Library.find({ owner: ownerId }).lean();
+
+  res.status(200).json({
+    success: true,
+    count: libraries.length,
+    data: libraries,
+  });
 });
 
-// 3. Batch Create Seats (e.g., Generate S-1 to S-50 automatically)
+// 3. Batch Create Seats
 export const batchCreateSeats = asyncHandler(async (req, res) => {
   const { libraryId } = req.params;
   const { prefix = "S", totalSeats, type, hasSocket, hasLocker } = req.body;
+  const ownerId = req.user?._id || req.user?.id;
 
-  await assertOwnership(libraryId, req.user.id);
+  await assertOwnership(libraryId, ownerId);
 
-  // Find existing seats to compute start offset
   const existingSeatsCount = await Seat.countDocuments({ library: libraryId });
 
   const seatsToInsert = [];
@@ -180,19 +78,17 @@ export const batchCreateSeats = asyncHandler(async (req, res) => {
   });
 });
 
-// 4. Owner Live Dashboard: Real-time floor plan view with occupancies
+// 4. Owner Live Floor Plan View
 export const getLiveOccupancy = asyncHandler(async (req, res) => {
   const { libraryId } = req.params;
   const { shiftId, date } = req.query;
+  const ownerId = req.user?._id || req.user?.id;
 
-  await assertOwnership(libraryId, req.user.id);
+  await assertOwnership(libraryId, ownerId);
 
   const targetDate = date ? new Date(date) : new Date();
-
-  // Fetch all physical desks
   const seats = await Seat.find({ library: libraryId }).lean();
 
-  // Query active bookings running on this specific date & shift
   const activeBookings = await Booking.find({
     library: libraryId,
     ...(shiftId && { shiftId }),
@@ -209,7 +105,7 @@ export const getLiveOccupancy = asyncHandler(async (req, res) => {
     bookingMap.set(b.seat.toString(), b);
   });
 
-const liveGrid = seats.map((seat) => {
+  const liveGrid = seats.map((seat) => {
     const booking = bookingMap.get(seat._id.toString());
     return {
       _id: seat._id,
@@ -217,12 +113,12 @@ const liveGrid = seats.map((seat) => {
       type: seat.type,
       hasSocket: seat.hasSocket,
       hasLocker: seat.hasLocker,
-      isMaintenance: Boolean(seat.isMaintenance), // <-- Add this line
+      isMaintenance: Boolean(seat.isMaintenance),
       isOccupied: Boolean(booking),
       occupiedBy: booking
         ? {
-            userName: booking.user.name,
-            userPhone: booking.user.phone,
+            userName: booking.user?.name,
+            userPhone: booking.user?.phone,
             bookingType: booking.bookingType,
             endDate: booking.endDate,
           }
@@ -238,7 +134,117 @@ const liveGrid = seats.map((seat) => {
   });
 });
 
-// 5. Manual Walk-in Desk Assignment (Offline student cash/UPI payment)
+// 5. Vacate Seat Early
+export const vacateSeat = asyncHandler(async (req, res, next) => {
+  const { libraryId, seatId } = req.params;
+  const ownerId = req.user?._id || req.user?.id;
+  await assertOwnership(libraryId, ownerId);
+
+  const booking = await Booking.findOne({
+    library: libraryId,
+    seat: seatId,
+    status: { $in: ["active", "confirmed"] },
+  });
+
+  if (!booking) {
+    return next(new ApiError(404, "No active booking found for this seat."));
+  }
+
+  booking.status = "cancelled";
+  booking.endDate = new Date();
+  await booking.save();
+
+  const io = req.app.get("io") || getIO();
+  if (io) {
+    io.to(`library_${libraryId}`).emit("seat_vacated", { seatId, libraryId });
+  }
+
+  res.status(200).json({ success: true, message: "Seat vacated successfully." });
+});
+
+// 6. Transfer Student Desk
+export const transferSeat = asyncHandler(async (req, res, next) => {
+  const { libraryId, currentSeatId } = req.params;
+  const { targetSeatId } = req.body;
+  const ownerId = req.user?._id || req.user?.id;
+  await assertOwnership(libraryId, ownerId);
+
+  if (currentSeatId === targetSeatId) {
+    return next(new ApiError(400, "Target seat must be different from current seat."));
+  }
+
+  const booking = await Booking.findOne({
+    library: libraryId,
+    seat: currentSeatId,
+    status: { $in: ["active", "confirmed"] },
+  });
+
+  if (!booking) {
+    return next(new ApiError(404, "No active booking found on current seat."));
+  }
+
+  const conflict = await Booking.findOne({
+    library: libraryId,
+    seat: targetSeatId,
+    status: { $in: ["active", "confirmed"] },
+  });
+
+  if (conflict) {
+    return next(new ApiError(400, "Target seat is already occupied."));
+  }
+
+  booking.seat = targetSeatId;
+  await booking.save();
+
+  const io = req.app.get("io") || getIO();
+  if (io) {
+    io.to(`library_${libraryId}`).emit("seat_transferred", {
+      fromSeatId: currentSeatId,
+      toSeatId: targetSeatId,
+      user: booking.user,
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Seat reassigned successfully.",
+    data: booking,
+  });
+});
+
+// 7. Toggle Maintenance Mode
+export const toggleSeatMaintenance = asyncHandler(async (req, res, next) => {
+  const { libraryId, seatId } = req.params;
+  const ownerId = req.user?._id || req.user?.id;
+  await assertOwnership(libraryId, ownerId);
+
+  const seat = await Seat.findOne({ _id: seatId, library: libraryId });
+  if (!seat) {
+    return next(new ApiError(404, "Seat not found."));
+  }
+
+  seat.isMaintenance = !seat.isMaintenance;
+  await seat.save();
+
+  const io = req.app.get("io") || getIO();
+  if (io) {
+    io.to(`library_${libraryId}`).emit("seat_maintenance_toggled", {
+      seatId: seat._id.toString(),
+      isMaintenance: seat.isMaintenance,
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Seat marked as ${seat.isMaintenance ? "Under Maintenance" : "Operational"}.`,
+    data: {
+      _id: seat._id,
+      isMaintenance: seat.isMaintenance,
+    },
+  });
+});
+
+// 8. Manual Walk-In Desk Assignment
 export const assignWalkIn = asyncHandler(async (req, res, next) => {
   const { libraryId } = req.params;
   const {
@@ -251,8 +257,9 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
     endDate,
     amountPaid,
   } = req.body;
+  const ownerId = req.user?._id || req.user?.id;
 
-  await assertOwnership(libraryId, req.user.id);
+  await assertOwnership(libraryId, ownerId);
 
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -261,7 +268,6 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
   session.startTransaction();
 
   try {
-    // Conflict validation inside transaction
     const conflict = await Booking.findOne({
       seat: seatId,
       shiftId,
@@ -272,26 +278,14 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
 
     if (conflict) {
       await session.abortTransaction();
-      return next(
-        new ApiError(
-          409,
-          "Seat is already occupied for this shift and duration.",
-        ),
-      );
+      return next(new ApiError(409, "Seat is already occupied for this shift."));
     }
 
-    // Auto-link or auto-provision walk-in user account
     let walkInUser = await User.findOne({ phone: userPhone }).session(session);
     if (!walkInUser) {
       const [newUser] = await User.create(
-        [
-          {
-            name: userName,
-            phone: userPhone,
-            role: "user",
-          },
-        ],
-        { session },
+        [{ name: userName, phone: userPhone, role: "user" }],
+        { session }
       );
       walkInUser = newUser;
     }
@@ -314,23 +308,21 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
           status: "active",
         },
       ],
-      { session },
+      { session }
     );
 
     await session.commitTransaction();
 
-    const io = getIO();
-
-    io.to(`library_${libraryId}`).emit("seat_reserved", {
-      seatId,
-      shiftId,
-      startDate: start,
-      endDate: end,
-      bookedBy: {
-        userName,
-        userPhone,
-      },
-    });
+    const io = req.app.get("io") || getIO();
+    if (io) {
+      io.to(`library_${libraryId}`).emit("seat_reserved", {
+        seatId,
+        shiftId,
+        startDate: start,
+        endDate: end,
+        bookedBy: { userName, userPhone },
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -345,17 +337,16 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
   }
 });
 
-// 6. Gate QR Pass Code Verification
-// 6. Gate QR Pass Code Verification
+// 9. Gate Turnstile QR Verification & Attendance Logging
 export const verifyGateQr = asyncHandler(async (req, res, next) => {
   const { libraryId } = req.params;
   const { qrPassCode, type = "in" } = req.body;
+  const ownerId = req.user?._id || req.user?.id;
 
-  await assertOwnership(libraryId, req.user.id);
+  await assertOwnership(libraryId, ownerId);
 
   const now = new Date();
 
-  // Find booking matching the scanned pass code
   const booking = await Booking.findOne({
     qrPassCode,
     library: libraryId,
@@ -368,22 +359,46 @@ export const verifyGateQr = asyncHandler(async (req, res, next) => {
     .populate("seat", "seatNumber type");
 
   if (!booking) {
-    return next(
-      new ApiError(404, "Invalid or expired pass code for this library")
-    );
+    return next(new ApiError(404, "Invalid or expired pass code for this library"));
+  }
+
+  // Attendance Logging
+  if (type === "in") {
+    await Attendance.create({
+      user: booking.user._id,
+      library: libraryId,
+      booking: booking._id,
+      checkInTime: now,
+      status: "inside",
+    });
+  } else if (type === "out") {
+    const activeSession = await Attendance.findOne({
+      user: booking.user._id,
+      library: libraryId,
+      status: "inside",
+    }).sort({ checkInTime: -1 });
+
+    if (activeSession) {
+      const diffMs = now - new Date(activeSession.checkInTime);
+      const diffMinutes = Math.max(1, Math.round(diffMs / (1000 * 60)));
+
+      activeSession.checkOutTime = now;
+      activeSession.durationMinutes = diffMinutes;
+      activeSession.status = "completed";
+      await activeSession.save();
+    }
   }
 
   const studentName = booking.user?.name || "Student";
   const seatNumber = booking.seat?.seatNumber || "N/A";
 
-  // Real-time broadcast to system activity feed (AFTER verification)
-  const io = req.app.get('io');
+  const io = req.app.get("io") || getIO();
   if (io) {
-    io.emit('activity_logged', {
+    io.emit("activity_logged", {
       id: Date.now(),
-      type: type === 'in' ? 'checkin' : 'checkout',
+      type: type === "in" ? "checkin" : "checkout",
       message: `${studentName} scanned ${type.toUpperCase()} (Desk ${seatNumber})`,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     });
   }
 
@@ -396,6 +411,58 @@ export const verifyGateQr = asyncHandler(async (req, res, next) => {
       seatNumber,
       seatType: booking.seat?.type,
       timestamp: now,
+    },
+  });
+});
+
+// 10. Financial Ledger & Revenue Breakdown
+export const getRevenueReport = asyncHandler(async (req, res) => {
+  const { libraryId } = req.params;
+  const { format = "json" } = req.query;
+  const ownerId = req.user?._id || req.user?.id;
+
+  await assertOwnership(libraryId, ownerId);
+
+  const bookings = await Booking.find({
+    library: libraryId,
+    paymentStatus: "completed",
+  })
+    .populate("user", "name phone email")
+    .populate("seat", "seatNumber type")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const totalCollected = bookings.reduce((sum, b) => sum + (b.amountPaid || 0), 0);
+  const walkInCount = bookings.filter((b) => !b.user?.email).length;
+  const onlineCount = bookings.length - walkInCount;
+
+  if (format === "csv") {
+    let csv = "Booking ID,Date,Student Name,Phone,Desk,Amount,Type\n";
+    bookings.forEach((b) => {
+      const date = new Date(b.createdAt).toISOString().split("T")[0];
+      const name = b.user?.name || "Walk-In Student";
+      const phone = b.user?.phone || "N/A";
+      const desk = b.seat?.seatNumber || "N/A";
+      const amount = b.amountPaid || 0;
+      const type = b.bookingType || "monthly";
+      csv += `"${b._id}","${date}","${name}","${phone}","${desk}","${amount}","${type}"\n`;
+    });
+
+    res.header("Content-Type", "text/csv");
+    res.attachment(`revenue-report-${libraryId}.csv`);
+    return res.send(csv);
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      metrics: {
+        totalCollected,
+        totalBookings: bookings.length,
+        walkInCount,
+        onlineCount,
+      },
+      transactions: bookings,
     },
   });
 });

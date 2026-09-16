@@ -3,7 +3,7 @@ import http from 'node:http';
 import mongoose from 'mongoose';
 import app from './app.js';
 import { initSocket } from './socket.js';
-import { startBookingExpiryJob } from './cron/bookingExpiry.js';
+import { initCronJobs } from './cron/bookingCleanup.js';
 
 const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
@@ -12,7 +12,7 @@ const httpServer = http.createServer(app);
 initSocket(httpServer);
 
 // Init background jobs
-startBookingExpiryJob();
+initCronJobs();
 
 // Connect DB & listen
 mongoose

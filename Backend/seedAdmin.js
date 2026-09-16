@@ -1,41 +1,40 @@
 import mongoose from "mongoose";
-import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import User from "./models/User.js";
 
 dotenv.config();
 
-const seedSuperAdmin = async () => {
+const fixSuperAdmin = async () => {
   try {
     const mongoUri = process.env.MONGO_URI || "mongodb://localhost:27017/deskplatform";
     await mongoose.connect(mongoUri);
-    console.log("Connected to MongoDB.");
 
-    const adminPhone = "9999999999";
-    const existingAdmin = await User.findOne({ phone: adminPhone });
+    const admin = await User.findOne({ phone: "9999999999" });
 
-    if (existingAdmin) {
-      existingAdmin.role = "admin";
-      await existingAdmin.save();
-      console.log(`Admin account already exists for ${adminPhone}. Role ensured as 'admin'.`);
+    if (admin) {
+      // Set plain text so Mongoose pre-save hook hashes it once (or set password123)
+      admin.password = "password123";
+      admin.role = "admin";
+      admin.isVerified = true;
+      await admin.save();
+      console.log("Super Admin updated successfully! isVerified: true, password: password123");
     } else {
-      const hashedPassword = await bcrypt.hash("admin123", 10);
-      const admin = await User.create({
+      await User.create({
         name: "Platform Super Admin",
-        phone: adminPhone,
+        phone: "9999999999",
         email: "admin@deskplatform.com",
-        password: hashedPassword,
+        password: "password123",
         role: "admin",
-        isActive: true,
+        isVerified: true,
       });
-      console.log("Super Admin seeded successfully:", admin.phone);
+      console.log("Super Admin created with password: password123");
     }
 
     process.exit(0);
   } catch (error) {
-    console.error("Failed to seed Super Admin:", error.message);
+    console.error("Error:", error.message);
     process.exit(1);
   }
 };
 
-seedSuperAdmin();
+fixSuperAdmin();

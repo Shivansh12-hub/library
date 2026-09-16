@@ -13,11 +13,14 @@ import UnauthorizedPage from "../pages/common/UnauthorizedPage";
 import ExploreLibraries from "../pages/user/ExploreLibraries";
 import SeatBookingView from "../pages/user/SeatBookingView";
 import MyPasses from "../pages/user/MyPasses";
+import StudyPlanner from "../pages/user/StudyPlanner";
+
 
 // Owner Pages
 import OwnerLiveFloor from "../pages/owner/OwnerLiveFloor";
 import WalkInDeskAssign from "../pages/owner/WalkInDeskAssign";
 import GateQrScanner from "../pages/owner/GateQrScanner";
+import OwnerRevenue from "../pages/owner/OwnerRevenue";
 
 // Admin Pages
 import AdminAnalytics from "../pages/admin/AdminAnalytics";
@@ -45,6 +48,7 @@ export default function AppRoutes() {
           element={<ProtectedRoute allowedRoles={["user", "owner", "admin"]} />}
         >
           <Route path="/study-planner" element={<StudyScheduler />} />
+          <Route path="/study-planner" element={<StudyPlanner />} />
           <Route path="/my-passes" element={<MyPasses />} />
         </Route>
 
@@ -53,14 +57,14 @@ export default function AppRoutes() {
           <Route path="/owner/live-grid" element={<OwnerLiveFloor />} />
           <Route path="/owner/walk-in" element={<WalkInDeskAssign />} />
           <Route path="/owner/gate-verify" element={<GateQrScanner />} />
+          <Route path="/owner/revenue" element={<OwnerRevenue />} />
         </Route>
 
         {/* Admin Routes */}
         <Route element={<ProtectedRoute allowedRoles={["admin"]} />}>
           <Route path="/admin/analytics" element={<AdminAnalytics />} />
-
-// Inside the Protected Route (role === 'admin')
-<Route path="/admin/analytics" element={<AdminAnalytics />} />
+          // Inside the Protected Route (role === 'admin')
+          <Route path="/admin/analytics" element={<AdminAnalytics />} />
         </Route>
       </Route>
 

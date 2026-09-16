@@ -12,9 +12,19 @@ import {
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import { createBookingSchema } from '../validators/userValidator.js';
+import { getStudyPlannerStats } from "../controllers/user.controller.js";
+import { addLibraryReview, getLibraryReviews } from "../controllers/user.controller.js";
+
 
 const router = Router();
 
+
+
+router.get("/libraries/:libraryId/reviews", getLibraryReviews);
+router.post("/libraries/:libraryId/reviews", authenticate, addLibraryReview);
+
+
+router.get("/study-stats", authenticate, getStudyPlannerStats);
 // Public Discovery Endpoints
 router.get('/libraries', getLibraries);
 router.get('/libraries/:id', getLibraryById);

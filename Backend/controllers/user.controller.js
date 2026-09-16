@@ -7,6 +7,92 @@ import Booking from "../models/Booking.js";
 import { ApiError, asyncHandler } from "../utils/apiResponse.js";
 import { getIO, finalizeBookingHold } from "../socket.js";
 
+import Attendance from "../models/Attendance.js";
+
+
+import Review from "../models/review.js";
+
+// 1. Submit a verified review for a library
+export const addLibraryReview = asyncHandler(async (req, res, next) => {
+  const { libraryId } = req.params;
+  const { rating, comment, tags } = req.body;
+  const userId = req.user._id || req.user.id;
+
+  // Verification guard: Must have booked this library at least once
+  const hasBooked = await Booking.exists({
+    user: userId,
+    library: libraryId,
+    paymentStatus: "completed",
+  });
+
+  if (!hasBooked) {
+    return next(new ApiError(403, "You can only review libraries where you have held a pass."));
+  }
+
+  const review = await Review.findOneAndUpdate(
+    { user: userId, library: libraryId },
+    { rating, comment, tags },
+    { new: true, upsert: true, runValidators: true }
+  );
+
+  res.status(201).json({
+    success: true,
+    message: "Review submitted successfully!",
+    data: review,
+  });
+});
+
+// 2. Fetch all reviews for a library
+export const getLibraryReviews = asyncHandler(async (req, res) => {
+  const { libraryId } = req.params;
+
+  const reviews = await Review.find({ library: libraryId })
+    .populate("user", "name")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const averageRating =
+    reviews.length > 0
+      ? (reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1)
+      : "New";
+
+  res.status(200).json({
+    success: true,
+    count: reviews.length,
+    averageRating,
+    data: reviews,
+  });
+});
+
+
+
+
+export const getStudyPlannerStats = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  const logs = await Attendance.find({ user: userId })
+    .populate("library", "name")
+    .sort({ checkInTime: -1 })
+    .limit(30)
+    .lean();
+
+  const totalMinutes = logs.reduce((acc, curr) => acc + (curr.durationMinutes || 0), 0);
+  const totalHours = (totalMinutes / 60).toFixed(1);
+
+  // Check if currently inside any library
+  const activeSession = logs.find((l) => l.status === "inside");
+
+  res.status(200).json({
+    success: true,
+    data: {
+      totalHours,
+      totalSessions: logs.length,
+      activeSession: activeSession || null,
+      history: logs,
+    },
+  });
+});
+
 // 1. Discover Libraries (Nearby coordinates, city, or amenities)
 export const getLibraries = asyncHandler(async (req, res) => {
   const {
