@@ -485,3 +485,68 @@ export const toggleSaveLibrary = asyncHandler(async (req, res, next) => {
     savedLibraries: user.savedLibraries,
   });
 });
+
+
+// Student Self-Service Desk Relocation within the same library & shift
+export const relocateMySeat = asyncHandler(async (req, res, next) => {
+  const { bookingId, targetSeatId } = req.body;
+  const userId = req.user._id || req.user.id;
+
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    user: userId,
+    status: "active",
+  });
+
+  if (!booking) {
+    return next(new ApiError(404, "Active booking pass not found"));
+  }
+
+  // Ensure target seat belongs to the same library and is operational
+  const targetSeat = await Seat.findOne({
+    _id: targetSeatId,
+    library: booking.library,
+    isActive: true,
+  });
+
+  if (!targetSeat) {
+    return next(new ApiError(404, "Target desk does not exist"));
+  }
+
+  if (targetSeat.isMaintenance) {
+    return next(new ApiError(400, "Target desk is currently under maintenance"));
+  }
+
+  // Double-booking check for target seat
+  const conflict = await Booking.findOne({
+    seat: targetSeatId,
+    shiftId: booking.shiftId,
+    status: "active",
+    paymentStatus: "completed",
+    $or: [{ startDate: { $lte: booking.endDate }, endDate: { $gte: booking.startDate } }],
+  });
+
+  if (conflict) {
+    return next(new ApiError(409, "Target seat is already occupied for this shift"));
+  }
+
+  const oldSeatId = booking.seat;
+  booking.seat = targetSeatId;
+  await booking.save();
+
+  // Notify real-time listeners across floor plans
+  const io = req.app.get("io") || getIO();
+  if (io) {
+    io.to(`library_${booking.library}`).emit("seat_transferred", {
+      fromSeatId: oldSeatId,
+      toSeatId: targetSeatId,
+      user: userId,
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Relocated successfully to Desk ${targetSeat.seatNumber}`,
+    data: booking,
+  });
+});
