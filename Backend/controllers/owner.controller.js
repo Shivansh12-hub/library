@@ -21,19 +21,69 @@ const assertOwnership = async (libraryId, ownerId) => {
   return library;
 };
 
-// 1. Create or Register a New Library Profile
-export const createLibrary = asyncHandler(async (req, res) => {
+// 1. Create or Register a New Library Profile with Automatic Seat Generation
+export const createLibrary = asyncHandler(async (req, res, next) => {
   const ownerId = req.user?._id || req.user?.id;
-  const newLibrary = await Library.create({
-    ...req.body,
-    owner: ownerId,
-  });
+  const {
+    name,
+    description,
+    address,
+    amenities = [],
+    shifts = [],
+    rules = [],
+    photos = [],
+    totalSeats = 20,
+    seatPrefix = "S",
+  } = req.body;
 
-  res.status(201).json({
-    success: true,
-    message: "Library profile created successfully",
-    data: newLibrary,
-  });
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const [library] = await Library.create(
+      [
+        {
+          name,
+          description,
+          owner: ownerId,
+          address,
+          amenities,
+          shifts,
+          rules,
+          photos,
+          isActive: true,
+        },
+      ],
+      { session }
+    );
+
+    // Auto-generate physical desks for this facility
+    const seatsToInsert = [];
+    for (let i = 1; i <= Number(totalSeats); i++) {
+      seatsToInsert.push({
+        library: library._id,
+        seatNumber: `${seatPrefix}-${i < 10 ? "0" + i : i}`,
+        type: "regular",
+        hasSocket: true,
+        hasLocker: false,
+        isActive: true,
+      });
+    }
+
+    await Seat.insertMany(seatsToInsert, { session });
+    await session.commitTransaction();
+
+    res.status(201).json({
+      success: true,
+      message: `Library created with ${seatsToInsert.length} configured desks!`,
+      data: library,
+    });
+  } catch (err) {
+    await session.abortTransaction();
+    return next(err);
+  } finally {
+    session.endSession();
+  }
 });
 
 // 2. Get All Libraries Belonging to Logged-in Owner
@@ -274,7 +324,7 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
       shiftId,
       status: "active",
       paymentStatus: "completed",
-      $or: [{ startDate: { $lte: end }, endDate: { $gte: start } }],
+      $or: [{ startDate: { $lte: end }, endDate: {$gte: start } }],
     }).session(session);
 
     if (conflict) {
@@ -316,13 +366,13 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
 
     const lib = await Library.findById(libraryId).select("name").lean();
 
-sendBookingConfirmationSMS({
-  phone: userPhone,
-  userName: userName,
-  libraryName: lib?.name || "DeskPlatform",
-  seatNumber: seatId, // or lookup seat.seatNumber
-  qrPassCode: qrPassCode,
-}).catch((err) => console.warn("Walk-in SMS dispatch failed:", err.message));
+    sendBookingConfirmationSMS({
+      phone: userPhone,
+      userName: userName,
+      libraryName: lib?.name || "DeskPlatform",
+      seatNumber: seatId,
+      qrPassCode: qrPassCode,
+    }).catch((err) => console.warn("Walk-in SMS dispatch failed:", err.message));
 
     const io = req.app.get("io") || getIO();
     if (io) {
@@ -342,7 +392,7 @@ sendBookingConfirmationSMS({
     });
   } catch (error) {
     await session.abortTransaction();
-    next(error);
+    return next(error);
   } finally {
     session.endSession();
   }

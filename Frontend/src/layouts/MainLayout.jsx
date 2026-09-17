@@ -148,6 +148,15 @@ export default function MainLayout() {
                 <li>
                   <Link to="/owner/revenue">Financial Ledger</Link>
                 </li>
+                {/* 🚀 New Onboarding Link */}
+                <li>
+                  <Link
+                    to="/owner/create-library"
+                    style={{ color: "#16a34a", fontWeight: "bold" }}
+                  >
+                    + Add New Library
+                  </Link>
+                </li>
               </>
             )}
 
@@ -284,7 +293,9 @@ export default function MainLayout() {
                     marginBottom: "2px",
                   }}
                 >
-                  <span style={{ textTransform: "uppercase", fontWeight: "bold" }}>
+                  <span
+                    style={{ textTransform: "uppercase", fontWeight: "bold" }}
+                  >
                     {item.type}
                   </span>
                   <span>{item.time}</span>

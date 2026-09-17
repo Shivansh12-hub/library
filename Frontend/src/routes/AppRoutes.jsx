@@ -21,6 +21,7 @@ import OwnerLiveFloor from "../pages/owner/OwnerLiveFloor";
 import WalkInDeskAssign from "../pages/owner/WalkInDeskAssign";
 import GateQrScanner from "../pages/owner/GateQrScanner";
 import OwnerRevenue from "../pages/owner/OwnerRevenue";
+import CreateLibrary from "../pages/owner/CreateLibrary";
 
 // Admin Pages
 import AdminAnalytics from "../pages/admin/AdminAnalytics";
@@ -58,6 +59,8 @@ export default function AppRoutes() {
           <Route path="/owner/walk-in" element={<WalkInDeskAssign />} />
           <Route path="/owner/gate-verify" element={<GateQrScanner />} />
           <Route path="/owner/revenue" element={<OwnerRevenue />} />
+
+          <Route path="/owner/create-library" element={<CreateLibrary />} />
         </Route>
 
         {/* Admin Routes */}

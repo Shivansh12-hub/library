@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import Booking from "../models/Booking.js";
 import { getIO } from "../socket.js";
-import { notifyPassExpiring } from "../utils/notificationService.js";
+import { notifyPassExpiring } from "../utils/smsService.js";
 
 export const initCronJobs = () => {
   // 1. Runs every hour to mark expired passes and free up seats

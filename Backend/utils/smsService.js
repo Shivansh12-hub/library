@@ -61,3 +61,39 @@ export const sendPassExpiryReminderSMS = async ({
   const message = `Hi ${userName}, your study pass for Desk ${seatNumber} at ${libraryName} expires on ${formattedDate}. Renew now to avoid seat cancellation.`;
   await sendSafeSMS(phone, message);
 };
+
+// 3. Wrapper matching user.controller.js import
+export const notifyBookingConfirmed = async ({
+  phone,
+  userName,
+  libraryName,
+  seatNumber,
+  startDate,
+  endDate,
+  qrPassCode,
+}) => {
+  return sendBookingConfirmationSMS({
+    phone,
+    userName,
+    libraryName,
+    seatNumber,
+    qrPassCode,
+  });
+};
+
+// 4. Wrapper matching cron/bookingCleanup.js import
+export const notifyPassExpiring = async ({
+  phone,
+  userName,
+  libraryName,
+  seatNumber,
+  endDate,
+}) => {
+  return sendPassExpiryReminderSMS({
+    phone,
+    userName,
+    libraryName,
+    seatNumber,
+    endDate,
+  });
+};
