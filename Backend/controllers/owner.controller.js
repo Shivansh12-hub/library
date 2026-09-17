@@ -7,6 +7,7 @@ import User from "../models/User.js";
 import Attendance from "../models/Attendance.js";
 import { ApiError, asyncHandler } from "../utils/apiResponse.js";
 import { getIO } from "../socket.js";
+import { sendBookingConfirmationSMS } from "../utils/smsService.js";
 
 // Helper: Ensure authenticated owner owns the target library
 const assertOwnership = async (libraryId, ownerId) => {
@@ -312,6 +313,16 @@ export const assignWalkIn = asyncHandler(async (req, res, next) => {
     );
 
     await session.commitTransaction();
+
+    const lib = await Library.findById(libraryId).select("name").lean();
+
+sendBookingConfirmationSMS({
+  phone: userPhone,
+  userName: userName,
+  libraryName: lib?.name || "DeskPlatform",
+  seatNumber: seatId, // or lookup seat.seatNumber
+  qrPassCode: qrPassCode,
+}).catch((err) => console.warn("Walk-in SMS dispatch failed:", err.message));
 
     const io = req.app.get("io") || getIO();
     if (io) {

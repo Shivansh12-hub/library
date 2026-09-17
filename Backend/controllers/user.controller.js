@@ -6,11 +6,10 @@ import Seat from "../models/Seat.js";
 import Booking from "../models/Booking.js";
 import { ApiError, asyncHandler } from "../utils/apiResponse.js";
 import { getIO, finalizeBookingHold } from "../socket.js";
-
+import { sendBookingConfirmationSMS } from "../utils/smsService.js";
 import Attendance from "../models/Attendance.js";
-
-
 import Review from "../models/review.js";
+import { notifyBookingConfirmed } from "../utils/notificationService.js";
 
 // 1. Submit a verified review for a library
 export const addLibraryReview = asyncHandler(async (req, res, next) => {
@@ -369,6 +368,20 @@ export const createBooking = asyncHandler(async (req, res, next) => {
 
   
     await session.commitTransaction();
+
+
+    const bookedUser = await User.findById(userId).select("name phone email").lean();
+const bookedLib = await Library.findById(libraryId).select("name").lean();
+
+if (bookedUser?.phone) {
+  sendBookingConfirmationSMS({
+    phone: bookedUser.phone,
+    userName: bookedUser.name,
+    libraryName: bookedLib?.name || "DeskPlatform",
+    seatNumber: seat.seatNumber,
+    qrPassCode: qrPassCode,
+  }).catch((err) => console.warn("SMS dispatch failed:", err.message));
+}
 
     // Release temporary hold because seat is now formally confirmed
     finalizeBookingHold(libraryId, shiftId, seatId);
